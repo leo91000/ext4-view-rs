@@ -3,6 +3,7 @@
 ## Unreleased
 
 * Fixed journal revocation records interpreting the header as table data.
+* Fixed committed journal revocations leaving older block mappings active.
 
 ## 1.0.0
 

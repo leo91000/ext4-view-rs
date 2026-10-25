@@ -79,9 +79,8 @@ struct BlockMapLoader<'a> {
     uncommitted_block_map: BlockMap,
 
     /// Revoked blocks in the current transaction. When a commit block
-    /// is reached, any keys in `uncommitted_block_map` that are in this
-    /// revoked list will be deleted instead of committing them to
-    /// `block_map`.
+    /// is reached, these keys are removed from both `block_map` and
+    /// `uncommitted_block_map`.
     revoked_blocks: Vec<FsBlockIndex>,
 
     /// Iterator over blocks in the journal inode. At construction, the
@@ -230,11 +229,12 @@ impl<'a> BlockMapLoader<'a> {
     fn process_commit_block(&mut self) -> Result<(), Ext4Error> {
         validate_commit_block_checksum(self.superblock, &self.block)?;
 
-        // Remove any revoked blocks from uncommitted blocks.
+        // A committed revocation also invalidates older committed mappings.
         for block_index in &self.revoked_blocks {
             // Don't check the `remove` return value, as a revoked block
             // wasn't necessarily reused later in the transaction.
             self.uncommitted_block_map.remove(block_index);
+            self.block_map.remove(block_index);
         }
         self.revoked_blocks.clear();
 
