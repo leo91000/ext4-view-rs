@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+* Fixed journal revocation records interpreting the header as table data.
+
 ## 1.0.0
 
 * MSRV increased to `1.85`.
