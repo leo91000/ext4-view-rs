@@ -4,6 +4,7 @@
 
 * Fixed journal revocation records interpreting the header as table data.
 * Fixed committed journal revocations leaving older block mappings active.
+* Fixed journal recovery stopping at the physical end of a circular journal.
 
 ## 1.0.0
 

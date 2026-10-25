@@ -9,6 +9,7 @@
 use super::block_header::{JournalBlockHeader, JournalBlockType};
 use crate::Ext4;
 use crate::checksum::Checksum;
+use crate::error::CorruptKind;
 use crate::inode::Inode;
 use crate::iters::file_blocks::FileBlocks;
 use crate::test_util::load_compressed_data;
@@ -162,6 +163,23 @@ impl JournalImage {
             "expected the entire recovered block to contain {value}",
         );
     }
+
+    /// Relocate the transaction across the circular journal's end.
+    fn wrap_transaction(&mut self, start: usize, first: usize, end: usize) {
+        let transaction: Vec<_> = (1..self.position)
+            .map(|index| self.journal_block(index).to_vec())
+            .collect();
+        for index in 1..self.blocks.len() {
+            self.journal_block(index).fill(0);
+        }
+        let positions = (start..end).chain(first..start);
+        for (index, block) in positions.zip(transaction) {
+            self.journal_block(index).copy_from_slice(&block);
+        }
+        self.set_superblock(16, u32::try_from(end).unwrap());
+        self.set_superblock(20, u32::try_from(first).unwrap());
+        self.set_superblock(28, u32::try_from(start).unwrap());
+    }
 }
 
 #[test]
@@ -205,4 +223,60 @@ fn test_invalid_commit_does_not_apply_revoke() {
     let commit = image.position.checked_sub(1).unwrap();
     image.journal_block(commit)[16] ^= 1;
     image.assert_read(b'a');
+}
+
+#[test]
+fn test_transaction_wraps_at_journal_end() {
+    // Wrap either between descriptor/data or between data/commit.
+    for tail_blocks in [1, 2] {
+        let mut image = JournalImage::new();
+        image.write(b'a');
+        image.commit();
+        let end = image.blocks.len();
+        let start = end.checked_sub(tail_blocks).unwrap();
+        image.wrap_transaction(start, 1, end);
+        image.assert_read(b'a');
+    }
+}
+
+#[test]
+fn test_wrap_respects_first_and_max_len() {
+    let mut image = JournalImage::new();
+    image.write(b'a');
+    image.commit();
+    let end = image.blocks.len().checked_sub(1).unwrap();
+    image.wrap_transaction(end.checked_sub(1).unwrap(), 2, end);
+    image.assert_read(b'a');
+}
+
+#[test]
+fn test_zero_start_is_empty() {
+    let mut image = JournalImage::new();
+    image.write(b'a');
+    image.commit();
+    image.set_superblock(28, 0);
+    image.assert_read(b'c');
+}
+
+#[test]
+fn test_invalid_journal_bounds() {
+    // first == 0, first >= max_len, start outside [first, max_len),
+    // and max_len extending beyond the journal inode.
+    for (first, start, end) in [
+        (0, 1, 1024),
+        (1024, 1, 1024),
+        (2, 1, 1024),
+        (1, 1024, 1024),
+        (1, 1, u32::MAX),
+    ] {
+        let mut image = JournalImage::new();
+        image.set_superblock(16, end);
+        image.set_superblock(20, first);
+        image.set_superblock(28, start);
+        assert_eq!(
+            Ext4::load(Box::new(image.bytes)).unwrap_err(),
+            CorruptKind::JournalSize,
+            "first={first}, start={start}, max_len={end}",
+        );
+    }
 }
